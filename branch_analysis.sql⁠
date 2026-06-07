@@ -1,0 +1,65 @@
+-- ====================================================================
+-- PROJECT: Cross-Border FX Transaction Monitoring & Operational Analytics
+-- PURPOSE: Analyze transaction velocity, calculate margins, and rank branch performance.
+-- AUTHOR: Bandini Raghav
+-- ====================================================================
+
+-- CTE 1: Calculate core transaction metrics and exchange margins per transaction
+WITH TransactionBase AS (
+    SELECT 
+        transaction_id,
+        branch_id,
+        source_currency,
+        target_currency,
+        amount_gbp,
+        fee_charged_gbp,
+        -- Calculate total revenue generated from the transaction
+        (amount_gbp * fx_margin_percentage) + fee_charged_gbp AS total_revenue_gbp,
+        transaction_timestamp,
+        DATE(transaction_timestamp) AS transaction_date
+    FROM mock_fx_transactions
+),
+
+-- CTE 2: Aggregate transaction data to evaluate branch-level operational performance
+BranchPerformance AS (
+    SELECT 
+        branch_id,
+        COUNT(transaction_id) AS total_transaction_volume,
+        SUM(amount_gbp) AS total_turnover_gbp,
+        SUM(total_revenue_gbp) AS cumulative_revenue_gbp,
+        AVG(total_revenue_gbp) AS average_transaction_value_gbp
+    FROM TransactionBase
+    GROUP BY branch_id
+)
+
+-- FINAL SELECT: Rank branches based on profitability metrics
+-- The highest revenue-generating branch receives Rank 1
+SELECT 
+    branch_id,
+    total_transaction_volume,
+    ROUND(total_turnover_gbp, 2) AS total_turnover_gbp,
+    ROUND(cumulative_revenue_gbp, 2) AS cumulative_revenue_gbp,
+    ROUND(average_transaction_value_gbp, 2) AS avg_ticket_size_gbp,
+    DENSE_RANK() OVER (ORDER BY cumulative_revenue_gbp DESC) AS branch_profitability_rank
+FROM BranchPerformance
+ORDER BY branch_profitability_rank ASC;
+
+
+-- ====================================================================
+-- BONUS METRIC: Operational Risk & Velocity Monitoring
+-- Tracks sudden hourly surges in currency volumes to flag operational risk.
+-- ====================================================================
+SELECT 
+    branch_id,
+    DATE_TRUNC('hour', transaction_timestamp) AS operational_hour,
+    COUNT(transaction_id) AS hourly_transaction_count,
+    SUM(amount_gbp) AS hourly_volume_gbp,
+    -- Tracks running transaction volume trends over a rolling 3-hour operational window
+    AVG(COUNT(transaction_id)) OVER(
+        PARTITION BY branch_id 
+        ORDER BY DATE_TRUNC('hour', transaction_timestamp)
+        ROWS BETWEEN 2 PRECEDING AND CURRENT ROW
+    ) AS rolling_3hr_volume_avg
+FROM mock_fx_transactions
+GROUP BY branch_id, DATE_TRUNC('hour', transaction_timestamp)
+ORDER BY branch_id, operational_hour;
